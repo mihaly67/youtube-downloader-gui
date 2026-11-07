@@ -42,8 +42,9 @@ exec /usr/bin/python3 /usr/lib/youtube-downloader-gui/gui_main.py "$@"
 EOF
 chmod 755 "$BUILD_DIR/usr/bin/youtube-downloader-gui"
 
-# Create /usr/bin/yt-dlp CLI wrapper so yt-dlp is also available system-wide
-cat << 'EOF' > "$BUILD_DIR/usr/bin/yt-dlp"
+# Create bundled yt-dlp CLI wrapper inside /usr/lib/youtube-downloader-gui/yt-dlp-cli
+# (so it never collides with an existing /usr/bin/yt-dlp package on MX Linux / Debian)
+cat << 'EOF' > "$BUILD_DIR/usr/lib/$PKG_NAME/yt-dlp-cli"
 #!/usr/bin/env python3
 import sys
 sys.path.insert(0, '/usr/lib/youtube-downloader-gui')
@@ -51,7 +52,7 @@ import yt_dlp
 if __name__ == '__main__':
     yt_dlp.main()
 EOF
-chmod 755 "$BUILD_DIR/usr/bin/yt-dlp"
+chmod 755 "$BUILD_DIR/usr/lib/$PKG_NAME/yt-dlp-cli"
 
 # Create Desktop entry
 cat << 'EOF' > "$BUILD_DIR/usr/share/applications/youtube-downloader-gui.desktop"
@@ -91,6 +92,9 @@ EOF
 cat << 'EOF' > "$BUILD_DIR/DEBIAN/postinst"
 #!/bin/bash
 set -e
+if [ ! -e /usr/bin/yt-dlp ] && [ ! -e /usr/local/bin/yt-dlp ]; then
+    ln -sf /usr/lib/youtube-downloader-gui/yt-dlp-cli /usr/local/bin/yt-dlp || true
+fi
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database -q /usr/share/applications || true
 fi
