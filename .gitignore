@@ -1,0 +1,6 @@
+deb_build/
+__pycache__/
+*.pyc
+*.pyo
+*.temp_clean.ts
+*.part
