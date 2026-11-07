@@ -545,6 +545,202 @@ def resolve_filemoon_f16px_aesgcm(embed_url: str, log_fn=None) -> str:
     return ""
 
 
+def resolve_pornhub(html_text: str, base_url: str, log_fn=None) -> list:
+    """
+    Pornhub, Redtube, YouPorn és az Aylo/MindGeek hálózat beágyazott flashvars és
+    mediaDefinitions JSON feloldója:
+    Közvetlenül kinyeri az 1080p, 720p, 480p HLS master.m3u8 és MP4 folyamokat,
+    valódi címmel, borítóképpel és másodperc-pontos videóhosszal!
+    """
+    import html as html_mod
+    results = []
+    data = {}
+
+    # 1. Keresés var flashvars_... = {...};
+    m = re.search(r"var\s+flashvars_\d+\s*=\s*(\{.+?\});\s*(?:var\s+|/\*)", html_text, re.DOTALL)
+    if not m:
+        m = re.search(r"var\s+flashvars_\d+\s*=\s*(\{.+?\});", html_text, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1))
+        except Exception:
+            try:
+                clean_json = m.group(1).replace(r'\/', '/')
+                data = json.loads(clean_json)
+            except Exception:
+                pass
+
+    title = data.get('video_title') or ""
+    if not title:
+        tm = re.search(r'<title>(.*?)</title>', html_text, re.IGNORECASE)
+        if tm:
+            title = html_mod.unescape(tm.group(1))
+            for suf in [" - Pornhub.com", " - Redtube.com", " - YouPorn.com"]:
+                if title.endswith(suf):
+                    title = title[:-len(suf)].strip()
+    if not title:
+        og_t = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        if og_t:
+            title = html_mod.unescape(og_t.group(1)).strip()
+    if not title:
+        title = "Pornhub_Video"
+
+    duration_sec = data.get('video_duration')
+    duration_str = "--:--"
+    if duration_sec:
+        try:
+            sec = int(duration_sec)
+            m_part, s_part = divmod(sec, 60)
+            h_part, m_part = divmod(m_part, 60)
+            duration_str = f"{h_part:d}:{m_part:02d}:{s_part:02d}" if h_part else f"{m_part:d}:{s_part:02d}"
+        except Exception:
+            pass
+
+    thumb_url = data.get('image_url') or ""
+    if not thumb_url:
+        im = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        if im:
+            thumb_url = html_mod.unescape(im.group(1))
+
+    media_defs = data.get('mediaDefinitions')
+    if not media_defs:
+        md_m = re.search(r'mediaDefinitions\s*:\s*(\[\s*\{.+?\}\s*\])', html_text, re.DOTALL)
+        if md_m:
+            try:
+                media_defs = json.loads(md_m.group(1).replace(r'\/', '/'))
+            except Exception:
+                pass
+
+    if isinstance(media_defs, list):
+        sorted_defs = sorted(
+            [d for d in media_defs if isinstance(d, dict) and d.get('videoUrl')],
+            key=lambda x: int(x.get('height') or x.get('quality') or 0),
+            reverse=True
+        )
+        for idx, md in enumerate(sorted_defs):
+            raw_u = md.get('videoUrl', '').strip()
+            if not raw_u:
+                continue
+            vurl = html_mod.unescape(raw_u).replace(r'\/', '/')
+            fmt = md.get('format', '').lower()
+            height = md.get('height') or md.get('quality') or ''
+            height_str = f"{height}p" if height else ""
+
+            stype = f"HLS {height_str} Stream (Pornhub CDN)" if fmt == 'hls' else f"MP4 {height_str} (Pornhub)"
+            results.append({
+                'title': title,
+                'display_title': f"{title} ({height_str})".strip(),
+                'url': vurl,
+                'type': stype,
+                'origin_desc': f"Pornhub {height_str}",
+                'duration': duration_str,
+                'thumb_url': thumb_url,
+                'referer': "https://www.pornhub.com/",
+                'embed_source': base_url,
+                'embed_parent_ref': base_url,
+                'video_group_id': base_url,
+                'priority': idx + 1,
+                'label': f"[{height_str or fmt.upper()}] {title[:55]}"
+            })
+
+    if results and log_fn:
+        sub_types = [r.get('type','').split()[1] for r in results[:4]]
+        log_fn(f"[FELOLDÓ] 🔓 Pornhub/Aylo médiafolyamok feloldva: {title} ({len(results)} sáv: {', '.join(sub_types)})")
+
+    return results
+
+
+def resolve_xvideos(html_text: str, base_url: str, log_fn=None) -> list:
+    """
+    XVideos és XNXX html5player videófeloldó (HLS master és High/Low MP4 minőségek).
+    """
+    import html as html_mod
+    results = []
+
+    title = ""
+    tm = re.search(r"html5player\.setVideoTitle\(['\"]([^'\"]+)['\"]\)", html_text)
+    if tm:
+        title = html_mod.unescape(tm.group(1)).strip()
+    if not title:
+        og_t = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        if og_t:
+            title = html_mod.unescape(og_t.group(1)).strip()
+    if not title:
+        title = "XVideos_Video"
+
+    thumb_url = ""
+    im = re.search(r"html5player\.setThumbUrl169\(['\"]([^'\"]+)['\"]\)", html_text)
+    if not im:
+        im = re.search(r"html5player\.setThumbUrl\(['\"]([^'\"]+)['\"]\)", html_text)
+    if im:
+        thumb_url = html_mod.unescape(im.group(1)).strip()
+
+    # HLS URL
+    hls_m = re.search(r"html5player\.setVideoHLS\(['\"]([^'\"]+)['\"]\)", html_text)
+    if hls_m:
+        hls_url = html_mod.unescape(hls_m.group(1)).strip()
+        results.append({
+            'title': title,
+            'display_title': f"{title} (HLS Valódi Minőség)".strip(),
+            'url': hls_url,
+            'type': "HLS Adaptív Stream (XVideos)",
+            'origin_desc': "XVideos HLS",
+            'duration': "--:--",
+            'thumb_url': thumb_url,
+            'referer': base_url,
+            'embed_source': base_url,
+            'embed_parent_ref': base_url,
+            'video_group_id': base_url,
+            'priority': 1,
+            'label': f"[HLS] {title[:55]}"
+        })
+
+    # High MP4 URL
+    high_m = re.search(r"html5player\.setVideoUrlHigh\(['\"]([^'\"]+)['\"]\)", html_text)
+    if high_m:
+        high_url = html_mod.unescape(high_m.group(1)).strip()
+        results.append({
+            'title': title,
+            'display_title': f"{title} (Magas Minőség MP4)".strip(),
+            'url': high_url,
+            'type': "MP4 High Stream (XVideos)",
+            'origin_desc': "XVideos High MP4",
+            'duration': "--:--",
+            'thumb_url': thumb_url,
+            'referer': base_url,
+            'embed_source': base_url,
+            'embed_parent_ref': base_url,
+            'video_group_id': base_url,
+            'priority': 2,
+            'label': f"[High MP4] {title[:55]}"
+        })
+
+    # Low MP4 URL
+    low_m = re.search(r"html5player\.setVideoUrlLow\(['\"]([^'\"]+)['\"]\)", html_text)
+    if low_m:
+        low_url = html_mod.unescape(low_m.group(1)).strip()
+        results.append({
+            'title': title,
+            'display_title': f"{title} (Normál Minőség MP4)".strip(),
+            'url': low_url,
+            'type': "MP4 Low Stream (XVideos)",
+            'origin_desc': "XVideos Low MP4",
+            'duration': "--:--",
+            'thumb_url': thumb_url,
+            'referer': base_url,
+            'embed_source': base_url,
+            'embed_parent_ref': base_url,
+            'video_group_id': base_url,
+            'priority': 3,
+            'label': f"[Low MP4] {title[:55]}"
+        })
+
+    if results and log_fn:
+        log_fn(f"[FELOLDÓ] 🔓 XVideos/XNXX sávok feloldva: {title} ({len(results)} sáv)")
+
+    return results
+
+
 def extract_hidden_ember_and_redirect_domains(html: str, base_url: str) -> tuple:
     """
     Tickzoo / Megalinks / Capistock stílusú rejtett #ember input + var urls = [...]

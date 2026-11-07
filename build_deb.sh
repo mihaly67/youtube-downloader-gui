@@ -8,7 +8,7 @@ YTDN_SRC="$SRC_ROOT/ytDownloader-main"
 VIDDL_SRC="$SRC_ROOT/video-downloader-master"
 
 PKG_NAME="youtube-downloader-gui"
-PKG_VER="2026.10.26-7"
+PKG_VER="2026.10.26-8"
 BUILD_DIR="$GUI_SRC/deb_build/${PKG_NAME}_${PKG_VER}_all"
 
 rm -rf "$GUI_SRC/deb_build"

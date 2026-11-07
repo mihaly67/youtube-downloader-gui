@@ -19,6 +19,7 @@ Képes:
 
 import os
 import sys
+import html
 import re
 import time
 import json
@@ -265,6 +266,26 @@ def resolve_disguised_embed(embed_url: str, parent_referer: str = "", extra_refe
 
     tag_str = f"{prefix_tag} " if prefix_tag else ""
     host_name = urllib.parse.urlparse(final_embed).netloc
+
+    # 0.5. Pornhub / Redtube / YouPorn / Aylo Network beágyazott és közvetlen feloldó
+    if any(k in final_embed.lower() for k in ['pornhub.', 'redtube.', 'youporn.', 'phncdn.']) or 'mediaDefinitions' in html or 'flashvars_' in html:
+        ph_items = extreme_resolvers.resolve_pornhub(html, final_embed, log_fn=log_fn)
+        if ph_items:
+            for it in ph_items:
+                if prefix_tag:
+                    it['display_title'] = f"{prefix_tag} {it['title']}".strip()
+                    it['label'] = f"[{prefix_tag}{it.get('type','Stream')}] {it['title'][:50]}"
+            return ph_items
+
+    # 0.6. XVideos / XNXX html5player beágyazott és közvetlen feloldó
+    if any(k in final_embed.lower() for k in ['xvideos.', 'xnxx.']) or 'html5player.setVideoHLS' in html:
+        xv_items = extreme_resolvers.resolve_xvideos(html, final_embed, log_fn=log_fn)
+        if xv_items:
+            for it in xv_items:
+                if prefix_tag:
+                    it['display_title'] = f"{prefix_tag} {it['title']}".strip()
+                    it['label'] = f"[{prefix_tag}{it.get('type','Stream')}] {it['title'][:50]}"
+            return xv_items
 
     # 1. DoodStream / Playmogo / DS2Play / MyVidPlay klónok (/pass_md5/... + makePlay())
     m_dood = re.search(r"\$\.get\(['\"](/pass_md5/[^'\"]+)['\"]", html)
@@ -699,7 +720,7 @@ class DeepStreamScannerWorker(QThread):
             re.IGNORECASE
         )
         for m in media_regex.finditer(normalized):
-            candidate = m.group(1).rstrip('",;\')]')
+            candidate = html.unescape(m.group(1).rstrip('",;\')]'))
             if candidate in seen:
                 continue
             if any(bad in candidate.lower() for bad in ['sprite', 'thumb', 'preview.mp4', '.gif', 'blank.mp4']):
@@ -998,12 +1019,74 @@ class InfoFetchWorker(QThread):
         self.referer = referer
         self.browser_cookies = browser_cookies
 
+    def _build_synthetic_info(self, resolved_items: list) -> dict:
+        best = resolved_items[0]
+        title = best.get('title', 'Videó')
+        thumb = best.get('thumb_url', '')
+        duration_str = best.get('duration', '')
+        dur_sec = None
+        if duration_str and duration_str not in ('--:--', 'Ismeretlen'):
+            parts = [int(p) for p in duration_str.split(':') if p.isdigit()]
+            if len(parts) == 2:
+                dur_sec = parts[0] * 60 + parts[1]
+            elif len(parts) == 3:
+                dur_sec = parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+        formats = []
+        for idx, it in enumerate(resolved_items):
+            u = it.get('url', '')
+            stype = it.get('type', '')
+            height = None
+            hm = re.search(r'(\d{3,4})p?', stype)
+            if hm:
+                height = int(hm.group(1))
+            ext = 'mp4'
+            proto = 'm3u8' if '.m3u8' in u.lower() else 'https'
+            fmt_id = f"{height}p" if height else f"sáv_{idx+1}"
+            formats.append({
+                'format_id': fmt_id,
+                'url': u,
+                'ext': ext,
+                'height': height,
+                'resolution': f"{height}p" if height else 'Standard',
+                'vcodec': 'h264',
+                'acodec': 'aac',
+                'protocol': proto,
+                'http_headers': {'Referer': it.get('referer', self.url)}
+            })
+
+        return {
+            'title': title,
+            'id': best.get('video_group_id', 'stream'),
+            'uploader': urllib.parse.urlparse(self.url).netloc,
+            'webpage_url': self.url,
+            'duration': dur_sec,
+            'thumbnail': thumb,
+            'formats': formats,
+            '_is_synthetic': True,
+            '_resolved_items': resolved_items,
+        }
+
     def run(self):
         try:
             self.log_msg.emit(f"[INFO] Adatok lekérése: {self.url}")
             headers = {'User-Agent': DEFAULT_UA}
             if self.referer:
                 headers['Referer'] = self.referer
+
+            # Gyorsítósáv speciális videómegosztókhoz (ahol a natív yt-dlp 410 Gone vagy blokkolt)
+            low = self.url.lower()
+            if any(k in low for k in ['pornhub.', 'phncdn.', 'xvideos.', 'xnxx.', 'youporn.', 'redtube.', 'spankbang.']):
+                self.log_msg.emit(f"[INFO] Speciális videómegosztó észlelve, közvetlen feloldó aktiválása...")
+                direct_resolved = resolve_disguised_embed(self.url, parent_referer=self.referer, log_fn=self.log_msg.emit)
+                if direct_resolved:
+                    synth_info = self._build_synthetic_info(direct_resolved)
+                    thumb_b = direct_resolved[0].get('thumb_bytes') or b""
+                    ref_for_thumb = direct_resolved[0].get('referer') or self.referer or self.url
+                    if not thumb_b and direct_resolved[0].get('thumb_url'):
+                        thumb_b = fetch_thumbnail_bytes(direct_resolved[0]['thumb_url'], referer=ref_for_thumb)
+                    self.finished_ok.emit(synth_info, thumb_b)
+                    return
 
             ydl_opts = {
                 'quiet': True,
@@ -1032,7 +1115,22 @@ class InfoFetchWorker(QThread):
 
             self.finished_ok.emit(info, thumb_bytes)
         except Exception as e:
-            self.failed.emit(clean_ansi(str(e)))
+            err_str = clean_ansi(str(e))
+            # Fallback: ha a yt-dlp elhasalt (410, 404, blokkolás), próbáljuk meg a resolve_disguised_embed-del
+            try:
+                self.log_msg.emit(f"[INFO] yt-dlp hiba ({err_str[:60]}), alternatív beágyazott feloldó indítása...")
+                direct_resolved = resolve_disguised_embed(self.url, parent_referer=self.referer, log_fn=self.log_msg.emit)
+                if direct_resolved:
+                    synth_info = self._build_synthetic_info(direct_resolved)
+                    thumb_b = direct_resolved[0].get('thumb_bytes') or b""
+                    ref_for_thumb = direct_resolved[0].get('referer') or self.referer or self.url
+                    if not thumb_b and direct_resolved[0].get('thumb_url'):
+                        thumb_b = fetch_thumbnail_bytes(direct_resolved[0]['thumb_url'], referer=ref_for_thumb)
+                    self.finished_ok.emit(synth_info, thumb_b)
+                    return
+            except Exception:
+                pass
+            self.failed.emit(err_str)
 
 
 class DownloadWorker(QThread):
@@ -1316,11 +1414,23 @@ class DownloadWorker(QThread):
             raise
         except Exception as e:
             err_str = clean_ansi(str(e))
-            if "Unsupported URL" in err_str and not embed_source:
-                self.log_msg.emit(f"[AUTO-FELOLDÓ] Unsupported URL észlelve, álcázott lejátszó feloldása: {url}")
+            if not embed_source and (
+                "Unsupported URL" in err_str or
+                "HTTP Error 410" in err_str or
+                "HTTP Error 404" in err_str or
+                "HTTP Error 470" in err_str or
+                "Unable to download webpage" in err_str or
+                not any(ext in url.lower() for ext in ['.mp4', '.m3u8', '.mpd', '.webm', '.mkv'])
+            ):
+                self.log_msg.emit(f"[AUTO-FELOLDÓ] yt-dlp hiba ({err_str[:60]}), álcázott lejátszó feloldása: {url}")
                 resolved = resolve_disguised_embed(url, parent_referer=referer, log_fn=self.log_msg.emit)
                 if resolved:
                     best = resolved[0]
+                    if custom_fmt:
+                        for r_it in resolved:
+                            if custom_fmt.lower() in r_it.get('type', '').lower() or custom_fmt in r_it.get('label', ''):
+                                best = r_it
+                                break
                     item_retry = {
                         'url': best['url'],
                         'referer': best.get('referer', url),
@@ -1329,10 +1439,10 @@ class DownloadWorker(QThread):
                     }
                     return self._download_single(item_retry)
 
-            if any(x in url.lower() for x in ['.m3u8', '.mpd', '/stream/', 'master.txt']):
+            if any(x in url.lower() for x in ['.m3u8', '.mpd', '.mp4', '.webm', '/stream/', 'master.txt']):
                 for candidate_u in [url] + backup_urls:
                     try:
-                        self.log_msg.emit(f"[FALLBACK] Álcázott HLS/DASH letöltő indítása: {candidate_u[:75]}...")
+                        self.log_msg.emit(f"[FALLBACK] Közvetlen FFmpeg/HLS letöltő indítása: {candidate_u[:75]}...")
                         out_file = self._ffmpeg_direct_fallback(candidate_u, out_dir, container, referer, title_hint)
                         return True, title_hint or os.path.basename(out_file), out_file
                     except Exception as sub_e:
@@ -2050,7 +2160,8 @@ class YouTubeDownloaderWindow(QMainWindow):
         low = raw_url.lower()
         return any(k in low for k in [
             'em=', 'embed=', 'tickzoo.', 'xleak.', 'capistock.', 'ghbrisk.',
-            'playmogo.', 'gofile.io', 'streamhg.', 'vidhide.', 'filemoon.', 'dood'
+            'playmogo.', 'gofile.io', 'streamhg.', 'vidhide.', 'filemoon.', 'dood',
+            'pornhub.', 'phncdn.', 'xvideos.', 'xnxx.', 'youporn.', 'redtube.', 'spankbang.'
         ])
 
     def fetch_video_info(self, target_override: str = "", referer_override: str = ""):
@@ -2142,6 +2253,14 @@ class YouTubeDownloaderWindow(QMainWindow):
 
         self.status_lbl.setText("Állapot: ✅ Videó és sávok elemzése kész. Készen áll a letöltésre!")
         self.append_log(f"[OK] Betöltve: {title} ({len(formats)} elérhető sáv)")
+
+        if info.get('_is_synthetic') and info.get('_resolved_items'):
+            self.discovered_combo.clear()
+            self.discovered_combo.addItem("🌐 Eredeti oldal URL", "")
+            for it in info['_resolved_items']:
+                self.discovered_combo.addItem(it['label'], it)
+            if self.discovered_combo.count() > 1:
+                self.discovered_combo.setCurrentIndex(1)
 
     def _on_info_failed(self, err: str):
         self.fetch_btn.setEnabled(True)
