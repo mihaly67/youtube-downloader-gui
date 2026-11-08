@@ -70,6 +70,9 @@ except ImportError:
     CHECKED_STATE = Qt.Checked
     UNCHECKED_STATE = Qt.Unchecked
 
+APP_VERSION = "2026.10.26-10"
+APP_RELEASE_TAG = "v10.0"
+
 ANSI_ESCAPE_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 DEFAULT_UA = (
@@ -902,7 +905,7 @@ class DeepStreamScannerWorker(QThread):
 
     def run(self):
         try:
-            self.log_msg.emit(f"[SCRAPER] 🕸️ Weboldal és Álcázott Stream Scraper v5.0 indítása: {self.url}")
+            self.log_msg.emit(f"[SCRAPER] 🕸️ Weboldal és Álcázott Stream Scraper {APP_RELEASE_TAG} indítása: {self.url}")
             all_discovered = []
             page_title = "Felfedezett_Videó"
 
@@ -1495,7 +1498,7 @@ class YouTubeDownloaderWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(
-            f"Univerzális YouTube & Vizuális Videóválasztó Scraper PRO v5.0 (yt-dlp {yt_dlp.version.__version__})"
+            f"YouTube & Univerzális Videóletöltő PRO {APP_RELEASE_TAG} (Kiadás: {APP_VERSION} | yt-dlp {yt_dlp.version.__version__})"
         )
         self.resize(1120, 860)
 
@@ -1678,10 +1681,10 @@ class YouTubeDownloaderWindow(QMainWindow):
             "background-color: #181b24; border: 1px solid #282d3e; border-radius: 10px; padding: 6px 10px;"
         )
         header_layout = QHBoxLayout(header_frame)
-        title_lbl = QLabel("🕸️ YouTube & Vizuális Videóválasztó Scraper PRO v5.0")
+        title_lbl = QLabel(f"🕸️ YouTube & Univerzális Videóletöltő PRO {APP_RELEASE_TAG}")
         title_lbl.setStyleSheet("font-size: 17px; font-weight: bold; color: #f8fafc; border: none;")
         ver_lbl = QLabel(
-            "Borítóképes Videóválasztó (?em= / többszörös lejátszó)  |  StreamHG & Dood Unpacker"
+            f"Kiadás: {APP_VERSION}  |  Borítóképes Előnézet  |  Pornhub, XVideos, GoFile, StreamHG, DoodStream"
         )
         ver_lbl.setStyleSheet("font-size: 12px; color: #a78bfa; border: none;")
         header_layout.addWidget(title_lbl)
@@ -1949,7 +1952,7 @@ class YouTubeDownloaderWindow(QMainWindow):
         main_layout.addWidget(self.tabs, 1)
 
         self.append_log(
-            "PRO v5.0 elindult: Vizuális (borítóképes) videóválasztó ablak több beágyazott videó esetére aktív!"
+            f"PRO {APP_RELEASE_TAG} (Kiadás: {APP_VERSION}) elindult: Borítóképes előnézet, Vizuális Videóválasztó és Univerzális Feloldók aktívak!"
         )
 
     def _populate_containers(self, mode: str):
