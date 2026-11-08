@@ -271,7 +271,12 @@ def resolve_disguised_embed(embed_url: str, parent_referer: str = "", extra_refe
     if any(k in final_embed.lower() for k in ['pornhub.', 'redtube.', 'youporn.', 'phncdn.']) or 'mediaDefinitions' in html or 'flashvars_' in html:
         ph_items = extreme_resolvers.resolve_pornhub(html, final_embed, log_fn=log_fn)
         if ph_items:
+            ph_thumb_bytes = b""
+            if ph_items[0].get('thumb_url'):
+                ph_thumb_bytes = fetch_thumbnail_bytes(ph_items[0]['thumb_url'], referer=final_embed)
             for it in ph_items:
+                if ph_thumb_bytes:
+                    it['thumb_bytes'] = ph_thumb_bytes
                 if prefix_tag:
                     it['display_title'] = f"{prefix_tag} {it['title']}".strip()
                     it['label'] = f"[{prefix_tag}{it.get('type','Stream')}] {it['title'][:50]}"
@@ -281,7 +286,12 @@ def resolve_disguised_embed(embed_url: str, parent_referer: str = "", extra_refe
     if any(k in final_embed.lower() for k in ['xvideos.', 'xnxx.']) or 'html5player.setVideoHLS' in html:
         xv_items = extreme_resolvers.resolve_xvideos(html, final_embed, log_fn=log_fn)
         if xv_items:
+            xv_thumb_bytes = b""
+            if xv_items[0].get('thumb_url'):
+                xv_thumb_bytes = fetch_thumbnail_bytes(xv_items[0]['thumb_url'], referer=final_embed)
             for it in xv_items:
+                if xv_thumb_bytes:
+                    it['thumb_bytes'] = xv_thumb_bytes
                 if prefix_tag:
                     it['display_title'] = f"{prefix_tag} {it['title']}".strip()
                     it['label'] = f"[{prefix_tag}{it.get('type','Stream')}] {it['title'][:50]}"
@@ -567,6 +577,10 @@ class VideoSelectorDialog(QDialog):
                 "background-color: #0d0f14; border: 1px solid #374151; border-radius: 8px; color: #6b7280;"
             )
             t_bytes = cand.get('thumb_bytes', b'')
+            if not t_bytes and cand.get('thumb_url'):
+                t_bytes = fetch_thumbnail_bytes(cand['thumb_url'], referer=cand.get('referer', ''))
+                if t_bytes:
+                    cand['thumb_bytes'] = t_bytes
             if t_bytes:
                 pix = QPixmap()
                 if pix.loadFromData(t_bytes):
@@ -1994,12 +2008,22 @@ class YouTubeDownloaderWindow(QMainWindow):
             f"Hossz: {data.get('duration', '--:--')}  |  {data.get('type', '')}"
         )
         t_bytes = data.get('thumb_bytes', b'')
+        if not t_bytes and data.get('thumb_url'):
+            ref_for_thumb = ref or self.referer_input.text().strip() or self.url_input.text().strip()
+            t_bytes = fetch_thumbnail_bytes(data['thumb_url'], referer=ref_for_thumb)
+            if t_bytes:
+                data['thumb_bytes'] = t_bytes
+        if not t_bytes and getattr(self, 'current_thumb_bytes', None):
+            t_bytes = self.current_thumb_bytes
+
         if t_bytes:
             pix = QPixmap()
             if pix.loadFromData(t_bytes):
+                w = max(self.thumb_label.width(), 320)
+                h = max(self.thumb_label.height(), 180)
                 self.thumb_label.setPixmap(
                     pix.scaled(
-                        self.thumb_label.size(),
+                        w, h,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation
                     )
@@ -2222,11 +2246,14 @@ class YouTubeDownloaderWindow(QMainWindow):
             self.video_title_lbl.setText(title)
             self.video_meta_lbl.setText(f"Forrás: {uploader}  |  Hossz: {duration}")
 
+        self.current_thumb_bytes = thumb_bytes
         if thumb_bytes:
             pix = QPixmap()
             if pix.loadFromData(thumb_bytes):
+                w = max(self.thumb_label.width(), 320)
+                h = max(self.thumb_label.height(), 180)
                 scaled = pix.scaled(
-                    self.thumb_label.size(),
+                    w, h,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
@@ -2258,6 +2285,8 @@ class YouTubeDownloaderWindow(QMainWindow):
             self.discovered_combo.clear()
             self.discovered_combo.addItem("🌐 Eredeti oldal URL", "")
             for it in info['_resolved_items']:
+                if thumb_bytes and not it.get('thumb_bytes'):
+                    it['thumb_bytes'] = thumb_bytes
                 self.discovered_combo.addItem(it['label'], it)
             if self.discovered_combo.count() > 1:
                 self.discovered_combo.setCurrentIndex(1)
